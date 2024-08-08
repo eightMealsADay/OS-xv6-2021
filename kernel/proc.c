@@ -313,6 +313,8 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  // child process copies the mask of parent 
+  np->trace_mask = p->trace_mask;
   release(&np->lock);
 
   return pid;
@@ -653,4 +655,26 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// Return the number of processes whose state is not UNUSED
+uint64
+get_nproc(void)
+{
+  struct proc *p;
+  uint64 num = 0;  //the number of processes
+
+  // traverse all processes
+  for (p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    // check if the processes's state is not UNUSED
+    //find all unused processes
+    if (p->state != UNUSED){
+      // the num add one
+      num++;
+    }
+
+    release(&p->lock);
+  }
+  return num;
 }
