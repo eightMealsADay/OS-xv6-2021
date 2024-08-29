@@ -15,6 +15,9 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+extern pte_t* walk(pagetable_t, uint64, int);
+
+
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
@@ -148,8 +151,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V)
-      panic("mappages: remap");
+  //  if(*pte & PTE_V)
+  //    panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -310,15 +313,17 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    *pte = ((*pte) & (~PTE_W)) | PTE_COW;  // set PTE_W of parent-proc unwritable and make it cow page
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
       goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // no mem allocation for child proc
+    // point at pa
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
       goto err;
     }
+    kaddref((void*)pa);
   }
   return 0;
 
@@ -346,10 +351,40 @@ uvmclear(pagetable_t pagetable, uint64 va)
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
-  uint64 n, va0, pa0;
-
+   uint64 n, va0, pa0;
+  pte_t* pte;    // add
+ 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if(va0 >= MAXVA)  
+      return -1;
+    if((pte = walk(pagetable, va0, 0)) == 0)
+      return -1;
+    if (((*pte & PTE_V) == 0) || ((*pte & PTE_U)) == 0) 
+      return -1;
+    pa0 = PTE2PA(*pte);
+    if(((*pte & PTE_W) == 0) && (*pte & PTE_COW)) {
+      acquire_refcnt();
+      if(kgetref((void*)pa0) == 1) {
+        *pte = (*pte | PTE_W) & (~PTE_COW);       
+      } else {        
+        char* mem = kalloc();
+        if(mem == 0) {
+          printf("copyout(): memery alloc fault\n");
+          release_refcnt();
+          return -1;
+        }
+        memmove(mem, (void*)pa0, PGSIZE);
+        uint newflags = (PTE_FLAGS(*pte) & (~PTE_COW)) | PTE_W;
+        if(mappages(pagetable, va0, PGSIZE, (uint64)mem, newflags) != 0) {
+          kfree(mem);
+          release_refcnt();
+          return -1;
+      }
+      kfree((void*)pa0);
+      }    
+      release_refcnt();
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -357,7 +392,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(n > len)
       n = len;
     memmove((void *)(pa0 + (dstva - va0)), src, n);
-
+ 
     len -= n;
     src += n;
     dstva = va0 + PGSIZE;
