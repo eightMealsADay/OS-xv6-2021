@@ -306,7 +306,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -316,8 +315,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     *pte = ((*pte) & (~PTE_W)) | PTE_COW;  // set PTE_W of parent-proc unwritable and make it cow page
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
     // no mem allocation for child proc
     // point at pa
     if(mappages(new, i, PGSIZE, pa, flags) != 0){
